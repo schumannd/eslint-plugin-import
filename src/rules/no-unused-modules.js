@@ -46,8 +46,9 @@ const DEFAULT = 'default'
 let preparationDone = false
 const importList = new Map()
 const exportList = new Map()
-const ignoredFiles = new Set()
+const ignoreExportFiles = new Set()
 const filesOutsideSrc = new Set()
+const ignoredFiles = new Set()
 
 const isNodeModule = path => {
   return /\/(node_modules)\//.test(path)
@@ -58,16 +59,20 @@ const isNodeModule = path => {
  *
  * return all files matching src pattern, which are not matching the ignoreExports pattern
  */
-const resolveFiles = (src, ignoreExports) => {
+const resolveFiles = (src, ignoreExports, ignore) => {
   const srcFiles = new Set()
   const srcFileList = listFilesToProcess(src)
 
-  // prepare list of ignored files
-  const ignoredFilesList =  listFilesToProcess(ignoreExports)
+  // prepare list of files where exports are ignored
+  const ignoreExportFilesList =  listFilesToProcess(ignoreExports)
+  ignoreExportFilesList.forEach(({ filename }) => ignoreExportFiles.add(filename))
+
+  // prepare list of completely ignored files
+  const ignoredFilesList =  listFilesToProcess(ignore)
   ignoredFilesList.forEach(({ filename }) => ignoredFiles.add(filename))
 
   // prepare list of source files, don't consider files from node_modules
-  srcFileList.filter(({ filename }) => !isNodeModule(filename)).forEach(({ filename }) => {
+  srcFileList.filter(({ filename }) => !isNodeModule(filename) && !ignoredFiles.has(filename)).forEach(({ filename }) => {
     srcFiles.add(filename)
   })
   return srcFiles
@@ -126,7 +131,7 @@ const prepareImportsAndExports = (srcFiles, context) => {
       importList.set(file, imports)
 
       // build up export list only, if file is not ignored
-      if (ignoredFiles.has(file)) {
+      if (ignoreExportFiles.has(file)) {
         return
       }
       namespace.forEach((value, key) => {
@@ -194,8 +199,8 @@ const getSrc = src => {
  * the start of a new eslint run
  */
 let srcFiles
-const doPreparation = (src, ignoreExports, context) => {
-  srcFiles = resolveFiles(getSrc(src), ignoreExports)
+const doPreparation = (src, ignoreExports, ignore, context) => {
+  srcFiles = resolveFiles(getSrc(src), ignoreExports, ignore)
   prepareImportsAndExports(srcFiles, context)
   determineUsage()
   preparationDone = true
@@ -283,6 +288,16 @@ module.exports = {
             minLength: 1,
           },
         },
+        ignore: {
+          description:
+            'files/paths for which exports and imports should be ignored (useful for test files)',
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
         missingExports: {
           description: 'report modules without any exports',
           type: 'boolean',
@@ -330,12 +345,13 @@ module.exports = {
     const {
       src,
       ignoreExports = [],
+      ignore = [],
       missingExports,
       unusedExports,
     } = context.options[0] || {}
 
     if (unusedExports && !preparationDone) {
-      doPreparation(src, ignoreExports, context)
+      doPreparation(src, ignoreExports, ignore, context)
     }
 
     const file = context.getFilename()
@@ -345,7 +361,7 @@ module.exports = {
         return
       }
 
-      if (ignoredFiles.has(file)) {
+      if (ignoreExportFiles.has(file)) {
         return
       }
 
@@ -369,7 +385,7 @@ module.exports = {
         return
       }
 
-      if (ignoredFiles.has(file)) {
+      if (ignoreExportFiles.has(file)) {
         return
       }
 
@@ -383,7 +399,7 @@ module.exports = {
 
       // make sure file to be linted is included in source files
       if (!srcFiles.has(file)) {
-        srcFiles = resolveFiles(getSrc(src), ignoreExports)
+        srcFiles = resolveFiles(getSrc(src), ignoreExports, ignoredFiles)
         if (!srcFiles.has(file)) {
           filesOutsideSrc.add(file)
           return
@@ -433,7 +449,7 @@ module.exports = {
      * update lists of existing exports during runtime
      */
     const updateExportUsage = node => {
-      if (ignoredFiles.has(file)) {
+      if (ignoreExportFiles.has(file)) {
         return
       }
 
